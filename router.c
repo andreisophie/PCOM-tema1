@@ -1,9 +1,11 @@
 #include "queue.h"
 #include "lib.h"
 #include "protocols.h"
+#include <arpa/inet.h>
 
 int main(int argc, char *argv[])
 {
+	setvbuf(stdout, NULL, _IONBF, 0);
 	char buf[MAX_PACKET_LEN];
 
 	// Do not modify this line
@@ -24,7 +26,7 @@ int main(int argc, char *argv[])
 		host order. For example, ntohs(eth_hdr->ether_type). The oposite is needed when
 		sending a packet on the link, */
 
-
+		printf("ether_type = %d", ntohs(eth_hdr->ether_type));
 	}
 }
 

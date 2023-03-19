@@ -1,2 +1,7 @@
 .vscode
 
+checker/__pycache__/info.cpython-310.pyc
+checker/__pycache__/tests.cpython-310.pyc
+
+*.o
+router
