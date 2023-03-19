@@ -26,7 +26,16 @@ int main(int argc, char *argv[])
 		host order. For example, ntohs(eth_hdr->ether_type). The oposite is needed when
 		sending a packet on the link, */
 
-		printf("ether_type = %d", ntohs(eth_hdr->ether_type));
+		uint16_t pck_ether_type = ntohs(eth_hdr->ether_type);
+		if (pck_ether_type == 0x0800) {
+			printf("Am primit pachet IP\n");
+		} else {
+			if (pck_ether_type == 0x0806) {
+				printf("Am primit pachet ARP\n");
+			} else {
+				printf("Am primit un pachet pe care nu il cunosc\n");
+			}
+		}
 	}
 }
 
