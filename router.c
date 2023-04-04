@@ -42,6 +42,31 @@ struct route_table_entry *get_best_route(uint32_t ip_dest) {
 	return NULL;
 }
 
+int check_checksum_ip(struct iphdr *header_ip) {
+	// verific checksum-ul
+	uint16_t old_check = ntohs(header_ip->check);
+	header_ip->check = 0;
+	if (old_check != checksum((uint16_t *)header_ip, sizeof(struct iphdr))) {
+		printf("checksum ip gresit\n");
+		return -1;
+	}
+	printf("checksum ip corect\n");
+	return 0;
+}
+
+int check_checksum_icmp(struct icmphdr *icmp_hdr) {
+	uint16_t old_checksum = ntohs(icmp_hdr->checksum);
+	icmp_hdr->checksum = 0;
+	uint16_t calc_checksum = checksum((uint16_t *)icmp_hdr, sizeof(struct icmphdr));
+	if (old_checksum != calc_checksum) {
+		printf("Checksum icmp gresit\n");
+		printf("checksum icmp old = %d\n", old_checksum);
+		printf("checksum icmp calculat = %d\n", calc_checksum);
+		return -1;
+	}
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	setvbuf(stdout, NULL, _IONBF, 0);
@@ -79,44 +104,63 @@ int main(int argc, char *argv[])
 		if (pck_ether_type == 0x0800) {
 			printf("Am primit pachet IP\n");
 			struct iphdr *header_ip = (struct iphdr *)(buf + sizeof(struct ether_header));
+
+			// verific checksum-ul ip
+			if (check_checksum_ip(header_ip) < 0) {
+				continue;
+			}
+
+			// verific TTL
+			if (header_ip->ttl == 1 || header_ip->ttl == 0) {
+				printf("pachetul are ttl<1, trebuie aruncat\n");
+				// TODO: trimit raspuns ICMP catre sender
+				continue;
+			}
+			header_ip->ttl--;
+			printf("ttl=%d\n", header_ip->ttl);
+
 			// verific daca pachetul este pentru mine
 			if (inet_addr(get_interface_ip(interface)) ==  header_ip->daddr) {
 				printf("Acest pachet este pentru mine\n");
-				// TODO: fa ceva
-			} else {
-				// verific checksum-ul
-				uint16_t old_check = ntohs(header_ip->check);
-				header_ip->check = 0;
-				if (old_check != checksum((uint16_t *)header_ip, sizeof(struct iphdr))) {
-					printf("checksum gresit\n");
-					continue;
-				}
-				printf("checksum corect\n");
-				// verific TTL
-				if (header_ip->ttl == 1 || header_ip->ttl == 0) {
-					printf("pachetul are ttl<1, trebuie aruncat\n");
-					// TODO: trimit raspuns ICMP catre sender
-					continue;
-				}
-				header_ip->ttl--;
-				// actualizez checksum
-				header_ip->check = htons(checksum((uint16_t *)header_ip, sizeof(struct iphdr)));
-
-				// caut in tabela de rutare
-				struct route_table_entry *entry_next_hop = get_best_route(header_ip->daddr);
-				uint32_t next_hop_ip = entry_next_hop->next_hop;
-
-				get_interface_mac(interface, eth_hdr->ether_shost);
-				DIE(eth_hdr->ether_shost == NULL, "get_interface_mac error");
-				// look for destination max in ARP table
-				for (int i = 0; i < arp_table_len; i++) {
-					if (arp_table[i].ip == next_hop_ip) {
-						memcpy(eth_hdr->ether_dhost, arp_table[i].mac, 6 * sizeof(uint8_t));
-					}
+				struct icmphdr *icmp_hdr = (struct icmphdr *)(buf + sizeof(struct ether_header) + sizeof(struct iphdr));
+				// verific checksum-ul header-ului icmp
+				if (check_checksum_icmp(icmp_hdr) < 0) {
+					// continue;
 				}
 
-				send_to_link(entry_next_hop->interface, buf, len);
+				// verific ce vrea pachetul
+				printf("icmp type=%d, code=%d\n", icmp_hdr->type, icmp_hdr->code);
+				if (icmp_hdr->type == 8 && icmp_hdr->code == 0) {
+					// am primit pachet "Hello" (echo request)
+					// raspund cu "I'm alive" (echo reply)
+					icmp_hdr->type = 0;
+					icmp_hdr->code = 0;
+					uint32_t src_addr = header_ip->saddr;
+					header_ip->saddr = header_ip->daddr;
+					header_ip->daddr = src_addr;
+				} else {
+					printf("ICMP Message not recognized\n");
+				}
+				icmp_hdr->checksum = htons(checksum((uint16_t *)icmp_hdr, sizeof(struct icmphdr)));
 			}
+			
+			// actualizez checksum
+			header_ip->check = htons(checksum((uint16_t *)header_ip, sizeof(struct iphdr)));
+
+			// caut in tabela de rutare
+			struct route_table_entry *entry_next_hop = get_best_route(header_ip->daddr);
+			uint32_t next_hop_ip = entry_next_hop->next_hop;
+
+			get_interface_mac(interface, eth_hdr->ether_shost);
+			DIE(eth_hdr->ether_shost == NULL, "get_interface_mac error");
+			// look for destination mac in ARP table
+			for (int i = 0; i < arp_table_len; i++) {
+				if (arp_table[i].ip == next_hop_ip) {
+					memcpy(eth_hdr->ether_dhost, arp_table[i].mac, 6 * sizeof(uint8_t));
+				}
+			}
+
+			send_to_link(entry_next_hop->interface, buf, len);
 		} else {
 			if (pck_ether_type == 0x0806) {
 				printf("Am primit pachet ARP\n");
