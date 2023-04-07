@@ -13,6 +13,12 @@ static int rtable_len;
 static struct arp_entry *arp_table;
 static int arp_table_len;
 
+int send_packet(void *buf,
+				int len,
+				struct ether_header *eth_hdr,
+				struct iphdr *ip_hdr,
+				int interface);
+
 // comparator sortez descrescator dupa prefix si masca
 int comparator(const void *route1, const void *route2) {
 	struct route_table_entry *rentry1 = (struct route_table_entry *)route1;
@@ -67,6 +73,64 @@ int check_checksum_icmp(struct icmphdr *icmp_hdr) {
 	return 0;
 }
 
+// functie care construieste un nou pachet de eroare icmp cu tipul si codul date
+int send_icmp_error(int interface, struct iphdr *old_iphdr, int icmp_type, int icmp_code) {
+	// trimit raspuns ICMP catre sender
+	char buf2[MAX_PACKET_LEN] = {0};
+	size_t len2 = sizeof(struct ether_header) + 2 * sizeof(struct iphdr) + sizeof(struct icmphdr) + 8;
+	// separ headerele din noul pachet
+	struct ether_header *eth_hdr2 = (struct ether_header *)buf2;
+	struct iphdr *ip_hdr2 = (struct iphdr *)(buf2 + sizeof(struct ether_header));
+	struct icmphdr *icmp_hdr2 = (struct icmphdr *)(buf2 + sizeof(struct ether_header) + sizeof(struct iphdr));
+	// setez tipul pachetului
+	eth_hdr2->ether_type = htons(0x0800);
+	// setez campurile din header-ul IP
+	ip_hdr2->ihl = 5;
+	ip_hdr2->version = 4;
+	ip_hdr2->tos = 0;
+	// TODO: id ?
+	ip_hdr2->tot_len = sizeof(struct iphdr) + sizeof(struct icmphdr);
+	ip_hdr2->frag_off = 0;
+	ip_hdr2->ttl = 64;
+	ip_hdr2->saddr = old_iphdr->daddr;
+	ip_hdr2->daddr = old_iphdr->saddr;
+	ip_hdr2->check = htons(checksum((uint16_t *)ip_hdr2, sizeof(struct iphdr)));
+	// setez campurile din header-ul icmp
+	icmp_hdr2->type = icmp_type;
+	icmp_hdr2->code = icmp_code;
+	icmp_hdr2->checksum = htons(checksum((uint16_t *)icmp_hdr2, sizeof(struct icmphdr)));
+	// copiez sub header-ul icmp vechiul header ip si 8 octeti din pachetul vechi
+	memcpy(icmp_hdr2 + sizeof(struct icmphdr), old_iphdr, sizeof(struct iphdr) + 8);
+	return send_packet(buf2, len2, eth_hdr2, ip_hdr2, interface);
+}
+
+// functie care imi trimite pachetul dupa ce am setat header-ul ip si celelalte date
+// (aceasta functie imi cauta adresele mac)
+int send_packet(void *buf,
+				int len,
+				struct ether_header *eth_hdr,
+				struct iphdr *ip_hdr,
+				int interface) {
+	struct route_table_entry *entry_next_hop = get_best_route(ip_hdr->daddr);
+	if (entry_next_hop == NULL) {
+		printf("unknown IP address\n");
+		send_icmp_error(interface, ip_hdr, 3, 0);
+		return -1;
+	}
+	uint32_t next_hop_ip = entry_next_hop->next_hop;
+
+	get_interface_mac(interface, eth_hdr->ether_shost);
+	DIE(eth_hdr->ether_shost == NULL, "get_interface_mac error");
+	// look for destination mac in ARP table
+	for (int i = 0; i < arp_table_len; i++) {
+		if (arp_table[i].ip == next_hop_ip) {
+			memcpy(eth_hdr->ether_dhost, arp_table[i].mac, 6 * sizeof(uint8_t));
+		}
+	}
+
+	return send_to_link(entry_next_hop->interface, buf, len);
+}
+
 int main(int argc, char *argv[])
 {
 	setvbuf(stdout, NULL, _IONBF, 0);
@@ -97,7 +161,7 @@ int main(int argc, char *argv[])
 		host order. For example, ntohs(eth_hdr->ether_type). The oposite is needed when
 		sending a packet on the link, */
 
-		printf("---START PACHET---\n");
+		printf("\n---START PACHET---\n");
 		printf("Adresa mea IP este %s\n", get_interface_ip(interface));
 		// verific tipul de pachet (IP sau ARP)
 		uint16_t pck_ether_type = ntohs(eth_hdr->ether_type);
@@ -112,8 +176,9 @@ int main(int argc, char *argv[])
 
 			// verific TTL
 			if (header_ip->ttl == 1 || header_ip->ttl == 0) {
-				printf("pachetul are ttl<1, trebuie aruncat\n");
-				// TODO: trimit raspuns ICMP catre sender
+				// daca ttl<=1, trimit raspuns icmp
+				printf("pachetul are ttl<=1, trimit raspuns");
+				send_icmp_error(interface, header_ip, 11, 0);
 				continue;
 			}
 			header_ip->ttl--;
@@ -124,9 +189,9 @@ int main(int argc, char *argv[])
 				printf("Acest pachet este pentru mine\n");
 				struct icmphdr *icmp_hdr = (struct icmphdr *)(buf + sizeof(struct ether_header) + sizeof(struct iphdr));
 				// verific checksum-ul header-ului icmp
-				if (check_checksum_icmp(icmp_hdr) < 0) {
-					// continue;
-				}
+				// if (check_checksum_icmp(icmp_hdr) < 0) {
+				// 	continue;
+				// }
 
 				// verific ce vrea pachetul
 				printf("icmp type=%d, code=%d\n", icmp_hdr->type, icmp_hdr->code);
@@ -147,20 +212,8 @@ int main(int argc, char *argv[])
 			// actualizez checksum
 			header_ip->check = htons(checksum((uint16_t *)header_ip, sizeof(struct iphdr)));
 
-			// caut in tabela de rutare
-			struct route_table_entry *entry_next_hop = get_best_route(header_ip->daddr);
-			uint32_t next_hop_ip = entry_next_hop->next_hop;
-
-			get_interface_mac(interface, eth_hdr->ether_shost);
-			DIE(eth_hdr->ether_shost == NULL, "get_interface_mac error");
-			// look for destination mac in ARP table
-			for (int i = 0; i < arp_table_len; i++) {
-				if (arp_table[i].ip == next_hop_ip) {
-					memcpy(eth_hdr->ether_dhost, arp_table[i].mac, 6 * sizeof(uint8_t));
-				}
-			}
-
-			send_to_link(entry_next_hop->interface, buf, len);
+			// trimit pachetul cu functia specializata
+			send_packet(&buf, len, eth_hdr, header_ip, interface);
 		} else {
 			if (pck_ether_type == 0x0806) {
 				printf("Am primit pachet ARP\n");
@@ -168,7 +221,7 @@ int main(int argc, char *argv[])
 				printf("Am primit un pachet pe care nu il cunosc\n");
 			}
 		}
-		printf("---GATA PACHET---\n\n");
+		printf("---GATA PACHET---\n");
 	}
 }
 
