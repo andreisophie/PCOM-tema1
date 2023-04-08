@@ -70,7 +70,6 @@ void filter_rtable() {
  is no matching route.
 */
 struct route_table_entry *get_best_route(uint32_t ip_dest) {
-	// TODO: implement binary search for this function
 	/* We can iterate through rtable for (int i = 0; i < rtable_len; i++). Entries in
 	 * the rtable are in network order already */
 	for (int i = 0; i < rtable_len; i++) {
@@ -84,14 +83,12 @@ struct route_table_entry *get_best_route(uint32_t ip_dest) {
 
 struct route_table_entry *get_best_route_binary(uint32_t ip_dest, int stg, int dr) {
 	int mij = (stg + dr) / 2;
-	printf("stg=%d, mij = %d, dr = %d\n", stg, mij, dr);
-	print_rtable_row(&rtable[mij]);
 	if ((ip_dest & rtable[mij].mask) == rtable[mij].prefix) {
+		// dupa ce am gasit un match, este posibil sa existe alt match mai bun in stanga mea
+		// asa ca mai fac cativa pasi de cautare liniara in stanga
 		while ((ip_dest & rtable[mij - 1].mask) == rtable[mij - 1].prefix && mij > 0)
 		{
 			mij--;
-			printf("stg=%d, mij = %d, dr = %d\n", stg, mij, dr);
-			print_rtable_row(&rtable[mij]);
 		}
 		return &rtable[mij];
 	} else {
@@ -180,17 +177,6 @@ int reply_arp(void *buf,
 	memcpy(mac_addr, eth_hdr->ether_dhost, 6);
 	memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, 6);
 	memcpy(eth_hdr->ether_shost, mac_addr, 6);
-	printf("Trimit pachet arp\n");
-	printf("ether_dhost=");
-	for (int i = 0; i < 6; i++) {
-		printf("%x.", eth_hdr->ether_dhost[i]);
-	}
-	printf("\n");
-	printf("ether_shost=");
-	for (int i = 0; i < 6; i++) {
-		printf("%x.", eth_hdr->ether_shost[i]);
-	}
-	printf("\n");
 
 	return send_to_link(interface, buf, len);
 }
@@ -202,24 +188,13 @@ int send_packet(void *buf,
 				struct ether_header *eth_hdr,
 				struct iphdr *ip_hdr,
 				int interface) {
-	printf("caut adresa ip ");
-	print_ip(ntohl(ip_hdr->daddr));
-	printf("\n");
-	struct route_table_entry *entry_next_hop_linear = get_best_route(ip_hdr->daddr);
 	struct route_table_entry *entry_next_hop = get_best_route_binary(ip_hdr->daddr, 0, rtable_len - 1);
-	printf("liniar vs binar\n");
-	print_rtable_row(entry_next_hop_linear);
-	print_rtable_row(entry_next_hop);
 	if (entry_next_hop == NULL) {
 		printf("unknown IP address\n");
 		send_icmp_error(interface, ip_hdr, 3, 0);
 		return -1;
 	}
 	uint32_t next_hop_ip = entry_next_hop->next_hop;
-	printf("next hop ip=");
-	print_ip(ntohl(next_hop_ip));
-	printf("\n");
-
 	get_interface_mac(interface, eth_hdr->ether_shost);
 	DIE(eth_hdr->ether_shost == NULL, "get_interface_mac error");
 	// look for destination mac in ARP table
@@ -228,13 +203,6 @@ int send_packet(void *buf,
 			memcpy(eth_hdr->ether_dhost, arp_table[i].mac, 6 * sizeof(uint8_t));
 		}
 	}
-
-	printf("mac daddr = %x.%x.%x.%x.%x.%x\n", eth_hdr->ether_dhost[0],
-											  eth_hdr->ether_dhost[1],
-											  eth_hdr->ether_dhost[2],
-											  eth_hdr->ether_dhost[3],
-											  eth_hdr->ether_dhost[4],
-											  eth_hdr->ether_dhost[5]);
 	
 
 	return send_to_link(entry_next_hop->interface, buf, len);
@@ -248,14 +216,13 @@ int main(int argc, char *argv[])
 	// Do not modify this line
 	init(argc - 2, argv + 2);
 
-	// parse route table and sort it
+	// parse route table, sort and filter it
 	rtable = calloc(MAX_RT_SIZE, sizeof(struct route_table_entry));
 	rtable_len = read_rtable(argv[1], rtable);
-	qsort((void *)rtable, rtable_len, sizeof(struct route_table_entry), comparator);
 	filter_rtable();
-	for (int i = 0; i < rtable_len; i++) {
+	qsort((void *)rtable, rtable_len, sizeof(struct route_table_entry), comparator);
+	for (int i = 0; i < rtable_len; i++)
 		print_rtable_row(&rtable[i]);
-	}
 	// use static arp for destination mac address
 	arp_table = calloc(MAX_ARP_SIZE, sizeof(struct arp_entry));
 	arp_table_len = parse_arp_table("arp_table.txt", arp_table);
