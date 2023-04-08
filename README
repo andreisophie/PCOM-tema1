@@ -6,10 +6,9 @@ Made by Andrei Maruntis 323CA
 Task-urile pe care le-am implementat sunt:
 
 - Procesul de dirijare (30p)
-- Longest Prefix Match eficient (16p)
 - Protocolul ICMP (21p)
 
-De asemenea am implementat partial Protocolul ARP, mai precis router-ul va raspunde la cereri de tip ARP request cu un ARP reply corespunzator.
+De asemenea am implementat partial Protocolul ARP, mai precis router-ul va raspunde la cereri de tip ARP request cu un ARP reply corespunzator, si am incercat sa implementez Longest Prefix Match eficient.
 
 ## Functionarea router-ului
 

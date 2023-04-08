@@ -188,7 +188,8 @@ int send_packet(void *buf,
 				struct ether_header *eth_hdr,
 				struct iphdr *ip_hdr,
 				int interface) {
-	struct route_table_entry *entry_next_hop = get_best_route_binary(ip_hdr->daddr, 0, rtable_len - 1);
+	// struct route_table_entry *entry_next_hop = get_best_route_binary(ip_hdr->daddr, 0, rtable_len - 1);
+	struct route_table_entry *entry_next_hop = get_best_route(ip_hdr->daddr);
 	if (entry_next_hop == NULL) {
 		printf("unknown IP address\n");
 		send_icmp_error(interface, ip_hdr, 3, 0);
