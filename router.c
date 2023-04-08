@@ -27,6 +27,7 @@ void print_ip(uint32_t ip_addr) {
 							ip_addr & 0x000000ff);
 }
 
+// functie care printeaza la consola o linie cu cele 4 randuri din rtable_row
 void print_rtable_row(struct route_table_entry *rtable_row) {
 	print_ip(ntohl(rtable_row->prefix));
 	printf(" ");
@@ -48,6 +49,8 @@ int comparator(const void *route1, const void *route2) {
 	return rentry2->mask - rentry1->mask;
 }
 
+// filtrez tabela de rutare de intrari pe care nu se poate da match
+// adica daca prefixul are mai multi biti nenuli decat masca
 void filter_rtable() {
 	int lastpos = 0;
 	for (int i = 0; i < rtable_len; i++) {
