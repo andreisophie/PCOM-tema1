@@ -19,6 +19,23 @@ int send_packet(void *buf,
 				struct iphdr *ip_hdr,
 				int interface);
 
+// functie care printeaza la consola o adresa ip in host order
+void print_ip(uint32_t ip_addr) {
+	printf("%u.%u.%u.%u", (ip_addr & 0xff000000) >> 24,
+							(ip_addr & 0x00ff0000) >> 16,
+							(ip_addr & 0x0000ff00) >> 8,
+							ip_addr & 0x000000ff);
+}
+
+void print_rtable_row(struct route_table_entry *rtable_row) {
+	print_ip(ntohl(rtable_row->prefix));
+	printf(" ");
+	print_ip(ntohl(rtable_row->next_hop));
+	printf(" ");
+	print_ip(ntohl(rtable_row->mask));
+	printf(" %d\n", rtable_row->interface);
+}
+
 // comparator sortez descrescator dupa prefix si masca
 int comparator(const void *route1, const void *route2) {
 	struct route_table_entry *rentry1 = (struct route_table_entry *)route1;
@@ -29,6 +46,20 @@ int comparator(const void *route1, const void *route2) {
 	}
 
 	return rentry2->mask - rentry1->mask;
+}
+
+void filter_rtable() {
+	int lastpos = 0;
+	for (int i = 0; i < rtable_len; i++) {
+		if (rtable[i].prefix != (rtable[i].prefix & rtable[i].mask)) {
+			continue;
+		}
+		if (i != lastpos) {
+			memcpy(&rtable[lastpos], &rtable[i], sizeof(struct route_table_entry));
+		}
+		lastpos++;
+	}
+	rtable_len = lastpos;
 }
 
 /*
@@ -46,6 +77,27 @@ struct route_table_entry *get_best_route(uint32_t ip_dest) {
 		}
 	}
 	return NULL;
+}
+
+struct route_table_entry *get_best_route_binary(uint32_t ip_dest, int stg, int dr) {
+	int mij = (stg + dr) / 2;
+	printf("stg=%d, mij = %d, dr = %d\n", stg, mij, dr);
+	print_rtable_row(&rtable[mij]);
+	if ((ip_dest & rtable[mij].mask) == rtable[mij].prefix) {
+		while ((ip_dest & rtable[mij - 1].mask) == rtable[mij - 1].prefix && mij > 0)
+		{
+			mij--;
+			printf("stg=%d, mij = %d, dr = %d\n", stg, mij, dr);
+			print_rtable_row(&rtable[mij]);
+		}
+		return &rtable[mij];
+	} else {
+		if ((ip_dest & rtable[mij].mask) > rtable[mij].prefix) {
+			return get_best_route_binary(ip_dest, stg, mij - 1);
+		} else {
+			return get_best_route_binary(ip_dest, mij + 1, dr);
+		}
+	}
 }
 
 int check_checksum_ip(struct iphdr *header_ip) {
@@ -147,13 +199,23 @@ int send_packet(void *buf,
 				struct ether_header *eth_hdr,
 				struct iphdr *ip_hdr,
 				int interface) {
-	struct route_table_entry *entry_next_hop = get_best_route(ip_hdr->daddr);
+	printf("caut adresa ip ");
+	print_ip(ntohl(ip_hdr->daddr));
+	printf("\n");
+	struct route_table_entry *entry_next_hop_linear = get_best_route(ip_hdr->daddr);
+	struct route_table_entry *entry_next_hop = get_best_route_binary(ip_hdr->daddr, 0, rtable_len - 1);
+	printf("liniar vs binar\n");
+	print_rtable_row(entry_next_hop_linear);
+	print_rtable_row(entry_next_hop);
 	if (entry_next_hop == NULL) {
 		printf("unknown IP address\n");
 		send_icmp_error(interface, ip_hdr, 3, 0);
 		return -1;
 	}
 	uint32_t next_hop_ip = entry_next_hop->next_hop;
+	printf("next hop ip=");
+	print_ip(ntohl(next_hop_ip));
+	printf("\n");
 
 	get_interface_mac(interface, eth_hdr->ether_shost);
 	DIE(eth_hdr->ether_shost == NULL, "get_interface_mac error");
@@ -163,6 +225,14 @@ int send_packet(void *buf,
 			memcpy(eth_hdr->ether_dhost, arp_table[i].mac, 6 * sizeof(uint8_t));
 		}
 	}
+
+	printf("mac daddr = %x.%x.%x.%x.%x.%x\n", eth_hdr->ether_dhost[0],
+											  eth_hdr->ether_dhost[1],
+											  eth_hdr->ether_dhost[2],
+											  eth_hdr->ether_dhost[3],
+											  eth_hdr->ether_dhost[4],
+											  eth_hdr->ether_dhost[5]);
+	
 
 	return send_to_link(entry_next_hop->interface, buf, len);
 }
@@ -179,6 +249,10 @@ int main(int argc, char *argv[])
 	rtable = calloc(MAX_RT_SIZE, sizeof(struct route_table_entry));
 	rtable_len = read_rtable(argv[1], rtable);
 	qsort((void *)rtable, rtable_len, sizeof(struct route_table_entry), comparator);
+	filter_rtable();
+	for (int i = 0; i < rtable_len; i++) {
+		print_rtable_row(&rtable[i]);
+	}
 	// use static arp for destination mac address
 	arp_table = calloc(MAX_ARP_SIZE, sizeof(struct arp_entry));
 	arp_table_len = parse_arp_table("arp_table.txt", arp_table);
