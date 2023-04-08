@@ -89,8 +89,9 @@ int send_icmp_error(int interface, struct iphdr *old_iphdr, int icmp_type, int i
 	ip_hdr2->version = 4;
 	ip_hdr2->tos = 0;
 	// TODO: id ?
-	ip_hdr2->tot_len = sizeof(struct iphdr) + sizeof(struct icmphdr);
-	ip_hdr2->frag_off = 0;
+	ip_hdr2->tot_len = htons(sizeof(struct iphdr) + sizeof(struct icmphdr));
+	ip_hdr2->frag_off = htons(0);
+	ip_hdr2->protocol = IPPROTO_ICMP;
 	ip_hdr2->ttl = 64;
 	ip_hdr2->saddr = old_iphdr->daddr;
 	ip_hdr2->daddr = old_iphdr->saddr;
@@ -102,6 +103,41 @@ int send_icmp_error(int interface, struct iphdr *old_iphdr, int icmp_type, int i
 	// copiez sub header-ul icmp vechiul header ip si 8 octeti din pachetul vechi
 	memcpy(icmp_hdr2 + sizeof(struct icmphdr), old_iphdr, sizeof(struct iphdr) + 8);
 	return send_packet(buf2, len2, eth_hdr2, ip_hdr2, interface);
+}
+
+// functie care trimite un raspuns arp reply la un arp request
+int reply_arp(void *buf,
+				int len,
+				struct ether_header *eth_hdr,
+				struct arp_header *arp_hdr,
+				int interface) {
+	// marchez pachetul ca fiind reply
+	arp_hdr->op = htons(2);
+	// inversez adresele ip
+	uint32_t ip_addr = arp_hdr->spa;
+	arp_hdr->spa = arp_hdr->tpa;
+	arp_hdr->tpa = ip_addr;
+	// completez adresele mac
+	memcpy(arp_hdr->tha, arp_hdr->sha, 6);
+	get_interface_mac(interface, arp_hdr->sha);
+	// swap adresele mac din header ethernet
+	uint8_t mac_addr[6];
+	memcpy(mac_addr, eth_hdr->ether_dhost, 6);
+	memcpy(eth_hdr->ether_dhost, eth_hdr->ether_shost, 6);
+	memcpy(eth_hdr->ether_shost, mac_addr, 6);
+	printf("Trimit pachet arp\n");
+	printf("ether_dhost=");
+	for (int i = 0; i < 6; i++) {
+		printf("%x.", eth_hdr->ether_dhost[i]);
+	}
+	printf("\n");
+	printf("ether_shost=");
+	for (int i = 0; i < 6; i++) {
+		printf("%x.", eth_hdr->ether_shost[i]);
+	}
+	printf("\n");
+
+	return send_to_link(interface, buf, len);
 }
 
 // functie care imi trimite pachetul dupa ce am setat header-ul ip si celelalte date
@@ -217,6 +253,11 @@ int main(int argc, char *argv[])
 		} else {
 			if (pck_ether_type == 0x0806) {
 				printf("Am primit pachet ARP\n");
+				struct arp_header *arp_hdr = (struct arp_header *)(buf + sizeof(struct ether_header));
+				// daca pachetul este de tip request, ii raspund
+				if (arp_hdr->op == htons(1)) {
+					reply_arp(buf, len, eth_hdr, arp_hdr, interface);
+				}
 			} else {
 				printf("Am primit un pachet pe care nu il cunosc\n");
 			}
